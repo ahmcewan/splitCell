@@ -1,0 +1,12 @@
+name: splitCell
+title: splitCell
+username:
+account: durocherlab
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 320153
+bundleId: 1500322
+url: https://durocherlab.shinyapps.io/splitcell/
+when: 1532548370.021
+asMultiple: FALSE
+asStatic: FALSE
