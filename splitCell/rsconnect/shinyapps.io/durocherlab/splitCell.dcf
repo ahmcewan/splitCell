@@ -5,8 +5,8 @@ account: durocherlab
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 320153
-bundleId: 1500322
+bundleId: 1541333
 url: https://durocherlab.shinyapps.io/splitcell/
-when: 1532548370.021
+when: 1534543681.73711
 asMultiple: FALSE
 asStatic: FALSE

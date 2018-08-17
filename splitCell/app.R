@@ -61,8 +61,10 @@ ui <- shinyUI(fluidPage(
     fluidRow(column(6,h4("Density Plot of Mean Edu Intensity"),plotOutput("edu_plot")),
              column(6,h4("Density Plot of Sum Dapi Intensity"),plotOutput("dapi_plot"))),
     fluidRow(column(6,uiOutput("slider_edu")),
-             column(3,uiOutput("slider_dapi")),
-             column(3,uiOutput("slider_cut"))),
+             column(2,uiOutput("slider_sub")),
+             column(2,uiOutput("slider_dapi")),
+             column(2,uiOutput("slider_cut"))),
+    fluidRow(column(12,h4("Proportion of Cells",tableOutput("population_stats")))),
     downloadButton("downloadData", "Download")
     
   )
@@ -85,7 +87,8 @@ server <- function(input, output, session){
     updateSelectInput(session, inputId ="dapi", choices =c("select" , col ))
     updateSelectInput(session, inputId ="foci", choices =c("select" , col ))
     updateSelectInput(session, inputId ="dapi_int", choices =c("select" , col ))
-    list(df=data.frame(df))
+    list(df=data.frame(df),
+         path_list=path_list)
     
   })
   
@@ -146,12 +149,14 @@ server <- function(input, output, session){
       dat.cols <- c("WellName", input$edu, input$dapi, input$foci, input$dapi_int)
       dat.all <- dataset()$df[,colnames(dataset()$df) %in% dat.cols]
       dat.cont <- dat.all
+      dat.all.count <- reshape_cols(dat.cont, cols=input$dapi_int)
       if (length(input$userChoiceTbl_cells_selected)!=0){
         dat.cont <- dat.cont[rawData$WellName %in% cont_wells()$coordinates,]
       }
     }
     list(dat.cont=dat.cont, 
-         dat.all=dat.all)
+         dat.all=dat.all,
+         dat.all.count=dat.all.count)
   })
   
   dat_g1 <- reactive({
@@ -169,8 +174,6 @@ server <- function(input, output, session){
     }else{
     edu_values <- subset_file()$dat.cont[[input$edu]]
     }
-    cut <- quantile(edu_values, 0.75, na.rm=TRUE)
-    edu_values <- edu_values[edu_values < cut]
     edu_dens <- density(edu_values, na.rm=TRUE)
     dens <- edu_dens$y
     #add 'max' localMaxima?
@@ -252,15 +255,39 @@ server <- function(input, output, session){
     peak1 <- maxPeaks[match(max(dapi_dens$y[maxPeaks]),dapi_dens$y[maxPeaks])]
     peak2 <- maxPeaks[match(max(dapi_dens$y[maxPeaks]),dapi_dens$y[maxPeaks]) + 1]
     valley <- minValley[minValley < peak2 & minValley > peak1]
+    valley0 <- peak1 - (valley-peak1)
+    cutoff <- peak2 + (peak2-valley)
+    
     list(maxPeaks=maxPeaks,
          dapi_dens=dapi_dens,
          peak1=peak1,
          peak2=peak2, 
          minValley=minValley,
-         valley=valley)
+         valley=valley,
+         valley0=valley0,
+         cutoff=cutoff)
     }
   })
   
+  output$slider_sub <- renderUI({
+    validate(
+      need(input$edu != "", ""),
+      need(input$dapi != "", ""),
+      need(input$foci != "", ""),
+      need(input$dapi_int != "", "")
+    )
+    if (input$edu %in% c("","select") | input$dapi %in% c("","select") | input$foci %in% c("","select")| input$dapi_int %in% c("","select")){
+      return(NULL)
+    }else{
+      validate(
+        need(input$edu != "", ""),
+        need(input$dapi != "", ""),
+        need(input$foci != "", ""),
+        need(input$dapi_int != "", "")
+      )
+      sliderInput("dapiSub", "SubG1 Threshold", min=dapi_threshold()$valley0-50, max=dapi_threshold()$peak1, value=dapi_threshold()$valley0)
+    }
+  })
   
   output$slider_dapi <- renderUI({
     validate(
@@ -293,7 +320,7 @@ server <- function(input, output, session){
     if (input$edu %in% c("","select") | input$dapi %in% c("","select") | input$foci %in% c("","select")| input$dapi_int %in% c("","select")){
       return(NULL)
     }else{
-    sliderInput("cutSlider", "Dapi cutoff", min=dapi_threshold()$peak1+50, max=dapi_threshold()$peak2+50, value=dapi_threshold()$valley+100)
+    sliderInput("cutSlider", "Dapi cutoff", min=dapi_threshold()$peak1+50, max=dapi_threshold()$peak2+100, value=dapi_threshold()$cutoff)
     }
   })
   
@@ -317,10 +344,14 @@ server <- function(input, output, session){
     
     #split data based on G1 and S/G2 threshold
     cell_cycle_threshold <- dapi_threshold()$dapi_dens$x[input$dapiSlider]
+    sub_g1_threshold <- dapi_threshold()$dapi_dens$x[input$dapiSub]
     dapi_cutoff <- dapi_threshold()$dapi_dens$x[input$cutSlider]
     dapi_values <- dat_edu()$edu_neg_pooled_dapi[[input$dapi]]
-    dat.g1 <- dat_edu()$edu_neg_pooled_dapi_all[dapi_values < cell_cycle_threshold,]
-    dat.S <- dat_edu()$edu_neg_pooled_dapi_all[dapi_values > cell_cycle_threshold  & dapi_values < dapi_cutoff,]
+    dapi_values <- dapi_values[dapi_values < dapi_cutoff]
+    dat.sub <- dat_edu()$edu_neg_pooled_dapi_all[dapi_values < sub_g1_threshold,]
+    dat.g1 <- dat_edu()$edu_neg_pooled_dapi_all[dapi_values < cell_cycle_threshold & dapi_values > sub_g1_threshold,]
+    dat.S <- dat_edu()$edu_neg_pooled_dapi_all[dapi_values > cell_cycle_threshold,]
+    edu_neg_subG1_int <- reshape_cols(dat.sub, cols=input$dapi_int)
     edu_neg_g1_int <- reshape_cols(dat.g1, cols=input$dapi_int)
     edu_neg_S_int <- reshape_cols(dat.S, cols=input$dapi_int)
     dat.g1 <- reshape_cols(dat.g1,cols=input$foci)
@@ -332,7 +363,8 @@ server <- function(input, output, session){
     edu_pos_foci <- reshape_cols(edu_pos_foci,cols=input$foci)
     
     
-    list(dat.g1=dat.g1, 
+    list(edu_neg_subG1_int=edu_neg_subG1_int,
+         dat.g1=dat.g1, 
          dat.S=dat.S,
          edu_pos_int=edu_pos_int,
          edu_neg_int=edu_neg_int,
@@ -342,6 +374,55 @@ server <- function(input, output, session){
     }
   })
   
+  populations <- reactive({
+    validate(
+      need(input$edu != "", ""),
+      need(input$dapi != "", ""),
+      need(input$foci != "", ""),
+      need(input$dapi_int != "", "")
+    )
+    if (input$edu %in% c("","select") | input$dapi %in% c("","select") | input$foci %in% c("","select")| input$dapi_int %in% c("","select")){
+      return(NULL)
+    }else{
+      if (length(dataset()$path_list) > 1){
+        total_cells <- apply(subset_file()$dat.all.count, 2, function(x) length(na.omit(x)))
+        count_subG1 <- apply(downloads()$edu_neg_subG1_int, 2, function(x) length(na.omit(x)))
+        count_G1 <- apply(downloads()$dat.g1, 2, function(x) length(na.omit(x)))
+        count_G2 <- apply(downloads()$dat.S, 2, function(x) length(na.omit(x)))
+        count_edu_neg <- apply(downloads()$edu_neg_int, 2, function(x) length(na.omit(x)))
+        count_edu_pos <- apply(downloads()$edu_pos_int, 2, function(x) length(na.omit(x)))
+      }else{
+        total_cells <- length(subset_file()$dat.all.count)
+        count_subG1 <- length(downloads()$edu_neg_subG1_int)
+        count_G1 <- length(downloads()$dat.g1)
+        count_G2 <- length(downloads()$dat.S)
+        count_edu_neg <- length(downloads()$edu_neg_subG1_int)
+        count_edu_pos <- length(downloads()$count_edu_pos)
+        
+      }
+      
+      pop_table <- data.frame(rbind(count_subG1,count_G1, count_G2, count_edu_neg,count_edu_pos,total_cells))
+      rownames(pop_table) <- c("subG1","G1", "G2","total edu-","total edu+","total")
+      list(pop_table=pop_table)
+    }
+  })
+  
+  
+  output$population_stats <- renderTable({
+    rownames=TRUE
+    validate(
+      need(input$edu != "", ""),
+      need(input$dapi != "", ""),
+      need(input$foci != "", ""),
+      need(input$dapi_int != "", "")
+    )
+    if (input$edu %in% c("","select") | input$dapi %in% c("","select") | input$foci %in% c("","select")| input$dapi_int %in% c("","select")){
+      return(NULL)
+    }else{
+      populations()$pop_table
+    }
+  },
+  rownames = TRUE)
   
   output$rawData <- renderDataTable({
     dat_edu()$edu_pos_pooled_dapi_all
@@ -363,7 +444,6 @@ server <- function(input, output, session){
   })
   
   output$dapi_plot <- renderPlot({
-    
     validate(
       need(input$edu != "", ""),
       need(input$dapi != "", ""),
@@ -374,8 +454,9 @@ server <- function(input, output, session){
       return(NULL)
     }else{
       plot(dapi_threshold()$dapi_dens$y, type="l")
-      abline(v=input$dapiSlider, col="blue")
-      abline(v=input$cutSlider, col="blue")
+      abline(v=input$dapiSub, col="blue")
+      abline(v=input$dapiSlider, col="red")
+      abline(v=input$cutSlider, col="green")
     }
   })
   
@@ -387,14 +468,13 @@ server <- function(input, output, session){
       paste("data-", Sys.Date(), ".xlsx", sep="")
     },
     content = function(con) {
-      write.xlsx2(downloads()$dat.g1, con, sheetName="edu_neg_G1_foci", row.names=FALSE)
+      write.xlsx2(populations()$pop_table, con, sheetName="population_props", row.names=TRUE)
+      write.xlsx2(downloads()$dat.g1, con, sheetName="edu_neg_G1_foci", row.names=FALSE, append = TRUE)
       write.xlsx2(downloads()$dat.S, con, sheetName="edu_neg_G2_foci", row.names=FALSE,append = TRUE)
       write.xlsx2(downloads()$edu_pos_foci, con, sheetName="edu_pos_foci", row.names=FALSE,append = TRUE)
       write.xlsx2(downloads()$edu_pos_int, con, sheetName="edu_pos_nuclear_int", row.names=FALSE, append = TRUE)
       write.xlsx2(downloads()$edu_neg_g1_int, con, sheetName="edu_neg_G1_int", row.names=FALSE,append = TRUE)
       write.xlsx2(downloads()$edu_neg_S_int, con, sheetName="edu_neg_G2_int", row.names=FALSE,append = TRUE)
-
-      
     }
   )
   
